@@ -1,11 +1,13 @@
 package app
 
 import (
+	"strings"
+
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/contract"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/registry"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 type marketsListRequest struct {
 	Active    *bool  `json:"active,omitempty"`
@@ -45,7 +47,7 @@ type priceRequest struct {
 }
 
 func commandSpecs() []registry.CommandSpec {
-	return []registry.CommandSpec{
+	specs := []registry.CommandSpec{
 		readCommand("doctor", []string{"doctor"}, "Check local readiness and public API reachability", nil, objectResponse(), false, 1<<20),
 		readCommand("markets.list", []string{"markets", "list"}, "List Gamma markets with bounded pagination", marketListFields(), arrayResponse(), true, 16<<20),
 		readCommand("markets.get", []string{"markets", "get"}, "Get one Gamma market by numeric ID or slug", []registry.FieldSpec{resourceField()}, objectResponse(), false, 16<<20),
@@ -67,6 +69,7 @@ func commandSpecs() []registry.CommandSpec {
 		readCommand("clob.last-trade", []string{"clob", "last-trade"}, "Get the most recent trade price for a token", []registry.FieldSpec{tokenField()}, objectResponse(), false, 1<<20),
 		readCommand("clob.time", []string{"clob", "time"}, "Get the CLOB server time", nil, registry.ValueSpec{Kind: registry.KindInteger}, false, 1<<20),
 	}
+	return append(specs, authenticatedCommandSpecs()...)
 }
 
 func newCommandRegistry() (*registry.Registry, error) {
@@ -75,7 +78,9 @@ func newCommandRegistry() (*registry.Registry, error) {
 		id := specs[index].ID
 		specs[index].NewRequest = func() any { return newRequest(id) }
 		specs[index].Output.ResponseFields = responseFields(id)
-		specs[index].Examples = commandExamples(id)
+		if len(specs[index].Examples) == 0 {
+			specs[index].Examples = commandExamples(id)
+		}
 		if id == "clob.book" {
 			specs[index].Output.HardItemLimit = 200
 		}
@@ -120,7 +125,7 @@ func tokenExample(command, tokenID string) registry.Example {
 func responseFields(id string) []string {
 	switch id {
 	case "doctor":
-		return []string{"ready", "gamma.reachable", "gamma.sampleItems", "clob.reachable", "clob.status", "authentication.required", "authentication.configured", "authentication.tradingEnabled"}
+		return []string{"ready", "gamma.reachable", "gamma.sampleItems", "clob.reachable", "clob.status", "authentication.required", "authentication.configured", "authentication.secretReady", "authentication.tradingEnabled"}
 	case "markets.list", "markets.get":
 		return []string{"id", "question", "slug", "active", "closed", "description", "clobTokenIds", "outcomes", "outcomePrices", "bestBid", "bestAsk", "lastTradePrice", "spread", "volume", "liquidity", "conditionId", "events"}
 	case "markets.search":
@@ -143,9 +148,40 @@ func responseFields(id string) []string {
 		return []string{"neg_risk"}
 	case "clob.book":
 		return []string{"market", "asset_id", "timestamp", "hash", "bids", "bids.price", "bids.size", "asks", "asks.price", "asks.size", "min_order_size", "tick_size", "neg_risk", "last_trade_price"}
+	case "auth.status":
+		return []string{"walletConfigured", "walletSecretReady", "walletError", "wallet", "address", "signatureType", "upstreamConfigured", "upstreamPath", "upstreamSha256", "upstreamRequiredRevision", "upstreamRevisionAttested", "ready", "protocol", "chainId"}
+	case "wallet.list":
+		return []string{"active", "wallets", "wallets.name", "wallets.address", "wallets.signatureType", "wallets.funder"}
+	case "wallet.show":
+		return []string{"name", "address", "signatureType", "funder", "active", "stored"}
+	case "wallet.create", "wallet.import", "wallet.use", "wallet.remove":
+		return mutationResponseFields("name", "address", "signatureType", "funder", "active", "stored", "removed")
+	case "wallet.sign-message":
+		return mutationResponseFields("address", "messageHash", "signature", "mode")
+	case "transactions.inspect":
+		return []string{"hash", "chainId", "from", "to", "nonce", "valueWei", "gas", "gasPriceWei", "maxFeePerGasWei", "maxPriorityFeeWei", "maxExecutionFeeWei", "type", "dataBytes", "selector", "dataPreview", "dataHash", "accessListEntries", "blobCount", "blobGasFeeCapWei", "rawTransactionHash"}
+	case "transactions.submit":
+		return mutationResponseFields("submitted", "hash", "transaction")
+	case "orders.list":
+		return []string{"data", "data.id", "data.status", "data.owner", "data.maker_address", "data.market", "data.asset_id", "data.side", "data.price", "data.original_size", "data.size_matched", "data.associate_trades", "data.outcome", "data.order_type", "data.created_at", "data.expiration", "next_cursor"}
+	case "trades.list":
+		return []string{"data", "data.id", "data.taker_order_id", "data.market", "data.asset_id", "data.side", "data.size", "data.price", "data.fee_rate_bps", "data.status", "data.match_time", "data.last_update", "data.outcome", "data.bucket_index", "data.owner", "data.maker_address", "data.maker_orders", "data.trader_side", "data.transaction_hash", "data.error_msg", "next_cursor"}
+	case "orders.get", "orders.create", "orders.cancel", "orders.cancel-batch", "orders.cancel-market", "orders.cancel-all", "balances.get", "approvals.check", "approvals.set":
+		if id == "orders.create" || id == "orders.cancel" || id == "orders.cancel-batch" || id == "orders.cancel-market" || id == "orders.cancel-all" || id == "approvals.set" {
+			return mutationResponseFields()
+		}
+		return nil
 	default:
 		return nil
 	}
+}
+
+func mutationResponseFields(resultFields ...string) []string {
+	fields := []string{"dryRun", "executes", "plan", "result"}
+	for _, field := range resultFields {
+		fields = append(fields, "result."+field)
+	}
+	return fields
 }
 
 func newRequest(id string) any {
@@ -164,6 +200,40 @@ func newRequest(id string) any {
 		return &tokenRequest{}
 	case "doctor", "clob.time":
 		return &struct{}{}
+	case "auth.status", "wallet.list":
+		return &struct{}{}
+	case "wallet.create":
+		return &walletCreateRequest{}
+	case "wallet.import":
+		return &walletImportRequest{}
+	case "wallet.use", "wallet.remove":
+		return &walletNameRequest{}
+	case "wallet.show", "approvals.check":
+		return &walletSelectionRequest{}
+	case "wallet.sign-message":
+		return &signMessageRequest{}
+	case "orders.list", "trades.list":
+		return &authenticatedListRequest{}
+	case "orders.get":
+		return &authenticatedIDRequest{}
+	case "balances.get":
+		return &balanceRequest{}
+	case "orders.create":
+		return &limitOrderRequest{}
+	case "orders.cancel":
+		return &cancelOrderRequest{}
+	case "orders.cancel-batch":
+		return &cancelBatchRequest{}
+	case "orders.cancel-market":
+		return &cancelMarketRequest{}
+	case "orders.cancel-all":
+		return &cancelAllRequest{}
+	case "approvals.set":
+		return &approvalRequest{}
+	case "transactions.inspect":
+		return &rawTransactionRequest{}
+	case "transactions.submit":
+		return &rawTransactionSubmitRequest{}
 	default:
 		return nil
 	}
@@ -229,20 +299,36 @@ func tokenField() registry.FieldSpec {
 }
 
 func stringField(name string, required bool, maxBytes int, description string) registry.FieldSpec {
-	return registry.FieldSpec{Name: name, Flag: name, Kind: registry.KindString, Required: required, MaxBytes: maxBytes, Normalize: registry.NormalizeTrim, Description: description}
+	return registry.FieldSpec{Name: name, Flag: flagName(name), Kind: registry.KindString, Required: required, MaxBytes: maxBytes, Normalize: registry.NormalizeTrim, Description: description}
 }
 
 func booleanField(name string, required bool, description string) registry.FieldSpec {
-	return registry.FieldSpec{Name: name, Flag: name, Kind: registry.KindBoolean, Required: required, Description: description}
+	return registry.FieldSpec{Name: name, Flag: flagName(name), Kind: registry.KindBoolean, Required: required, Description: description}
 }
 
 func integerField(name string, required bool, min, max, defaultValue int, description string) registry.FieldSpec {
 	minimum, maximum := intString(min), intString(max)
-	return registry.FieldSpec{Name: name, Flag: name, Kind: registry.KindInteger, Required: required, Minimum: &minimum, Maximum: &maximum, Default: defaultValue, Description: description}
+	return registry.FieldSpec{Name: name, Flag: flagName(name), Kind: registry.KindInteger, Required: required, Minimum: &minimum, Maximum: &maximum, Default: defaultValue, Description: description}
 }
 
 func enumField(name string, required bool, values []string, description string) registry.FieldSpec {
-	return registry.FieldSpec{Name: name, Flag: name, Kind: registry.KindString, Required: required, Enum: values, Normalize: registry.NormalizeUppercase, Description: description}
+	normalize := registry.NormalizeUppercase
+	if len(values) > 0 && values[0] == strings.ToLower(values[0]) {
+		normalize = registry.NormalizeLowercase
+	}
+	return registry.FieldSpec{Name: name, Flag: flagName(name), Kind: registry.KindString, Required: required, Enum: values, Normalize: normalize, Description: description}
+}
+
+func flagName(name string) string {
+	result := make([]byte, 0, len(name)+4)
+	for _, current := range []byte(name) {
+		if current >= 'A' && current <= 'Z' {
+			result = append(result, '-', current+'a'-'A')
+			continue
+		}
+		result = append(result, current)
+	}
+	return string(result)
 }
 
 func intString(value int) string {

@@ -42,7 +42,7 @@ func TestRegistryIsDeterministicAndAppliesDefaults(t *testing.T) {
 	if len(index.Commands) != 1 || index.Commands[0].ID != "clob.book" {
 		t.Fatalf("unexpected index: %#v", index)
 	}
-	wantControls := []string{"--compact", "--fields", "--json", "--params", "--timeout"}
+	wantControls := []string{"--compact", "--execute", "--fields", "--json", "--params", "--timeout"}
 	gotControls := make([]string, len(index.InvocationControls))
 	for index, control := range index.InvocationControls {
 		gotControls[index] = control.Name
