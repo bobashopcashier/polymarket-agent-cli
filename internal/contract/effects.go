@@ -18,6 +18,7 @@ const (
 	MutationApproval    MutationKind = "token.approval"
 	MutationOnchain     MutationKind = "onchain.transaction"
 	MutationCredential  MutationKind = "credential.write"
+	MutationSignature   MutationKind = "signature.create"
 )
 
 type RiskTier string

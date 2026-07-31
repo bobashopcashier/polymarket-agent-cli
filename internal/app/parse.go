@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ type globalOptions struct {
 	HasParams bool
 	Fields    string
 	Compact   bool
+	Execute   bool
 	Timeout   time.Duration
 	Help      bool
 	Version   bool
@@ -66,11 +68,19 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 				}
 				options.Timeout = duration
 			}
-		case "--compact":
+		case "--compact", "--execute":
 			if hasInline {
-				return globalOptions{}, nil, contract.Invalid("invalid_flag", "--compact does not accept a value")
+				return globalOptions{}, nil, contract.Invalid("invalid_flag", fmt.Sprintf("%s does not accept a value", name))
 			}
-			options.Compact = true
+			if seen[name] {
+				return globalOptions{}, nil, contract.Invalid("duplicate_flag", fmt.Sprintf("%s may be supplied only once", name))
+			}
+			seen[name] = true
+			if name == "--compact" {
+				options.Compact = true
+			} else {
+				options.Execute = true
+			}
 		case "--json":
 			if hasInline {
 				return globalOptions{}, nil, contract.Invalid("invalid_flag", "--json does not accept a value")
@@ -86,7 +96,7 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 	return options, remaining, nil
 }
 
-func parseInvocation(arguments []string, stdin io.Reader, commands *registry.Registry) (invocation, error) {
+func parseInvocation(ctx context.Context, arguments []string, stdin io.Reader, commands *registry.Registry) (invocation, error) {
 	if err := params.RejectArgumentControls(arguments); err != nil {
 		return invocation{}, err
 	}
@@ -119,7 +129,7 @@ func parseInvocation(arguments []string, stdin io.Reader, commands *registry.Reg
 		if err := params.EnsureParamsExclusive(true, requestTokens); err != nil {
 			return invocation{}, err
 		}
-		raw, err := params.ReadSource(options.ParamsRaw, stdin, command.Params.MaximumBytes)
+		raw, err := params.ReadSourceContext(ctx, options.ParamsRaw, stdin, command.Params.MaximumBytes)
 		if err != nil {
 			return invocation{}, err
 		}
