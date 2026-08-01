@@ -34,8 +34,24 @@ func RejectArgumentControls(arguments []string) error {
 		if err := RejectControls(fmt.Sprintf("argument %d", index+1), argument); err != nil {
 			return err
 		}
+		if strings.HasPrefix(argument, "--") {
+			name := strings.TrimPrefix(strings.SplitN(argument, "=", 2)[0], "--")
+			if isCredentialName(name) {
+				return contract.Invalid("credential_parameter", "credential-shaped command-line flags are forbidden")
+			}
+		}
 	}
 	return nil
+}
+
+func isCredentialName(name string) bool {
+	canonical := strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(name))
+	switch canonical {
+	case "privatekey", "apikey", "secret", "apisecret", "password", "credential", "credentials", "mnemonic", "seedphrase":
+		return true
+	default:
+		return false
+	}
 }
 
 func IsUnsafeRune(current rune) bool {

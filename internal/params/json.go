@@ -407,9 +407,7 @@ func rejectCredentialKeys(value any, prefix string) error {
 	case map[string]any:
 		for key, child := range typed {
 			path := joinPath(prefix, key)
-			canonical := strings.ToLower(strings.NewReplacer("-", "", "_", "").Replace(key))
-			switch canonical {
-			case "privatekey", "apikey", "secret", "apisecret", "password", "credential", "credentials", "mnemonic", "seedphrase":
+			if isCredentialName(key) {
 				return contract.Invalid("credential_parameter", fmt.Sprintf("credential field %q is forbidden in --params", path))
 			}
 			if err := rejectCredentialKeys(child, path); err != nil {

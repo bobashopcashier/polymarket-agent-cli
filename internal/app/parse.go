@@ -18,6 +18,7 @@ type globalOptions struct {
 	ParamsRaw string
 	HasParams bool
 	Fields    string
+	HasFields bool
 	Compact   bool
 	DryRun    bool
 	Execute   bool
@@ -62,7 +63,7 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 			case "--params":
 				options.ParamsRaw, options.HasParams = value, true
 			case "--fields":
-				options.Fields = value
+				options.Fields, options.HasFields = value, true
 			case "--output":
 				if seen["--json"] {
 					return globalOptions{}, nil, contract.Invalid("conflicting_inputs", "--output and --json are aliases and cannot be combined")
@@ -136,11 +137,7 @@ func parseInvocation(ctx context.Context, arguments []string, stdin io.Reader, c
 		requestStart = 2
 	}
 	if !ok {
-		candidate := remaining
-		if len(candidate) > 2 {
-			candidate = candidate[:2]
-		}
-		return invocation{}, contract.Invalid("unknown_command", fmt.Sprintf("unknown command %q", strings.Join(candidate, " ")))
+		return invocation{}, contract.Invalid("unknown_command", "unknown command; run pmx schema for supported command paths")
 	}
 	requestTokens := remaining[requestStart:]
 	request := command.NewRequest()

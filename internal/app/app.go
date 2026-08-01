@@ -130,7 +130,7 @@ func (a *App) Run(ctx context.Context, arguments []string) int {
 	}
 	options, remaining, parseErr := parseGlobal(arguments)
 	writer := output.NewWriter(a.stdout, a.stderr, output.Options{
-		Format: output.FormatJSON, Compact: options.Compact, Fields: options.Fields,
+		Format: output.FormatJSON, Compact: options.Compact, Fields: options.Fields, FieldsSet: options.HasFields,
 		MaximumBytes: output.DefaultMaximumBytes,
 	})
 	if parseErr != nil {
@@ -160,7 +160,7 @@ func (a *App) Run(ctx context.Context, arguments []string) int {
 		return 0
 	}
 	if remaining[0] == "schema" {
-		if options.HasParams || options.Fields != "" {
+		if options.HasParams || options.HasFields {
 			return a.fail(writer, "schema", contract.Invalid("conflicting_inputs", "schema does not accept --params or --fields"))
 		}
 		return a.runSchema(writer, remaining[1:])
@@ -170,7 +170,7 @@ func (a *App) Run(ctx context.Context, arguments []string) int {
 	if err != nil {
 		return a.fail(writer, commandHint(remaining), mapExecutionError(err))
 	}
-	if invocation.Options.Fields != "" {
+	if invocation.Options.HasFields {
 		if err := output.ValidateFieldMask(invocation.Options.Fields, invocation.Command.Output.ResponseFields); err != nil {
 			return a.fail(writer, invocation.Command.ID, err)
 		}
@@ -625,10 +625,12 @@ func commandHint(arguments []string) string {
 	if len(arguments) == 0 {
 		return ""
 	}
-	if len(arguments) == 1 {
+	switch arguments[0] {
+	case "schema", "version", "help", "doctor", "markets", "events", "clob", "auth", "wallet", "orders", "trades", "balances", "approvals", "transactions":
 		return arguments[0]
+	default:
+		return ""
 	}
-	return arguments[0] + "." + arguments[1]
 }
 
 func helpText() string {

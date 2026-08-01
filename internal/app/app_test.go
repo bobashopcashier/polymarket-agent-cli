@@ -132,6 +132,48 @@ func TestDryRunControlRejectsNonMutationsAndExecuteConflict(t *testing.T) {
 	}
 }
 
+func TestCredentialAndUnknownArgumentsAreNeverReflected(t *testing.T) {
+	const secret = "SENTINEL_ARGV_VALUE_MUST_NOT_APPEAR"
+	tests := []struct {
+		name      string
+		arguments []string
+		wantCode  string
+	}{
+		{name: "credential flag", arguments: []string{"--private-key", secret, "markets", "list", "--compact"}, wantCode: "credential_parameter"},
+		{name: "credential inline", arguments: []string{"--private-key=" + secret, "markets", "list", "--compact"}, wantCode: "credential_parameter"},
+		{name: "unknown command", arguments: []string{"unknown-command", secret, "--compact"}, wantCode: "unknown_command"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			application, stdout, stderr, calls := newTestApp(t, nil, "")
+			if exit := application.Run(context.Background(), test.arguments); exit != 2 {
+				t.Fatalf("exit=%d stdout=%s stderr=%s", exit, stdout.String(), stderr.String())
+			}
+			if stdout.Len() != 0 || calls.Load() != 0 || strings.Contains(stderr.String(), secret) {
+				t.Fatalf("invalid argument leaked or crossed a boundary: stdout=%s stderr=%s calls=%d", stdout.String(), stderr.String(), calls.Load())
+			}
+			document := decodeDocument(t, stderr)
+			if document["error"].(map[string]any)["code"] != test.wantCode {
+				t.Fatalf("unexpected error: %#v", document)
+			}
+		})
+	}
+}
+
+func TestExplicitEmptyFieldMaskFailsClosed(t *testing.T) {
+	application, stdout, stderr, calls := newTestApp(t, nil, "")
+	if exit := application.Run(context.Background(), []string{"markets", "list", "--fields=", "--compact"}); exit != 2 {
+		t.Fatalf("exit=%d stdout=%s stderr=%s", exit, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 || calls.Load() != 0 {
+		t.Fatalf("empty field mask crossed a boundary: stdout=%s calls=%d", stdout.String(), calls.Load())
+	}
+	document := decodeDocument(t, stderr)
+	if document["error"].(map[string]any)["code"] != "invalid_fields" {
+		t.Fatalf("unexpected error: %#v", document)
+	}
+}
+
 func TestEveryCommandSchemaIncludesAnExample(t *testing.T) {
 	commandRegistry, err := newCommandRegistry()
 	if err != nil {
