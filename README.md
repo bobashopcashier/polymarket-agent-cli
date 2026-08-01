@@ -11,11 +11,7 @@ created or imported through a masked controlling-terminal prompt and stored in
 the operating-system keychain. Live signing and financial mutations require a
 separate typed confirmation on the controlling terminal.
 
-> [!WARNING]
-> Trading and on-chain operations can lose funds. This release supports EOA
-> wallet profiles only. It does not guess whether an address is a Polymarket
-> Proxy, Gnosis Safe, or Deposit Wallet. Start with small amounts and reconcile
-> exit code `9` before retrying anything.
+
 
 ## Why this CLI exists
 
