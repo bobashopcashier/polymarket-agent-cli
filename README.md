@@ -5,10 +5,6 @@ data. It is written in Go and designed around runtime discovery, strict JSON
 requests, bounded machine output, predictable errors, and hostile-input
 handling.
 
-> [!IMPORTANT]
-> This MVP does not place orders, cancel orders, approve tokens, sign messages,
-> submit transactions, or manage wallets. It accepts no private key on the
-> command line. Do not treat it as a live trading client.
 
 ## Why this CLI exists
 
