@@ -59,6 +59,9 @@ func ParseFile(path string) (*Parsed, error) {
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("raw transaction file path must be absolute")
 	}
+	if filepath.Clean(path) != path || strings.ContainsAny(path, "?#") {
+		return nil, errors.New("raw transaction file path must be normalized and contain no traversal, query, or fragment syntax")
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, errors.New("could not inspect raw transaction file")

@@ -139,7 +139,7 @@ func testUpstreamRunner(t *testing.T, body string) *upstream.Runner {
 	return runner
 }
 
-func TestMutationDryRunDoesNotAuthorizeReadSecretsOrExecute(t *testing.T) {
+func TestExplicitMutationDryRunDoesNotAuthorizeReadSecretsOrExecute(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "executed")
 	runner := testUpstreamRunner(t, `touch "`+marker+`"; printf '{"unexpected":true}'`)
 	terminal := &fakeConsole{}
@@ -149,7 +149,7 @@ func TestMutationDryRunDoesNotAuthorizeReadSecretsOrExecute(t *testing.T) {
 	}
 	getsBefore, setsBefore, deletesBefore := secrets.counts()
 	exit := application.Run(context.Background(), []string{
-		"orders", "create", "--params", `{"tokenId":"123","side":"BUY","price":"0.45","size":"10","maxNotionalPusd":"5","clientRequestId":"dry-1"}`, "--compact",
+		"orders", "create", "--dry-run", "--params", `{"tokenId":"123","side":"BUY","price":"0.45","size":"10","maxNotionalPusd":"5","clientRequestId":"dry-1"}`, "--compact",
 	})
 	if exit != 0 || stderr.Len() != 0 {
 		t.Fatalf("exit=%d stderr=%s", exit, stderr.String())

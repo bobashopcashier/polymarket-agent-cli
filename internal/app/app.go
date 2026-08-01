@@ -16,6 +16,7 @@ import (
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/contract"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/httpx"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/output"
+	"github.com/bobashopcashier/polymarket-agent-cli/internal/params"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/provider"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/registry"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/sanitize"
@@ -135,10 +136,16 @@ func (a *App) Run(ctx context.Context, arguments []string) int {
 	if parseErr != nil {
 		return a.fail(writer, "", parseErr)
 	}
+	if err := params.RejectArgumentControls(arguments); err != nil {
+		return a.fail(writer, commandHint(remaining), err)
+	}
 	executionContext, cancel := context.WithTimeout(ctx, options.Timeout)
 	defer cancel()
 	if options.Execute && (options.Version || options.Help || len(remaining) == 0 || remaining[0] == "version" || remaining[0] == "help" || remaining[0] == "schema") {
 		return a.fail(writer, commandHint(remaining), contract.Invalid("execute_not_supported", "--execute is accepted only by mutation commands"))
+	}
+	if options.DryRun && (options.Version || options.Help || len(remaining) == 0 || remaining[0] == "version" || remaining[0] == "help" || remaining[0] == "schema") {
+		return a.fail(writer, commandHint(remaining), contract.Invalid("dry_run_not_supported", "--dry-run is accepted only by mutation commands"))
 	}
 	if options.Version || len(remaining) == 1 && remaining[0] == "version" {
 		if err := output.WriteJSON(a.stdout, map[string]any{"name": "pmx", "version": version}, options.Compact, output.DefaultMaximumBytes); err != nil {
@@ -170,6 +177,9 @@ func (a *App) Run(ctx context.Context, arguments []string) int {
 	}
 	if invocation.Options.Execute && !invocation.Command.Effects.Effects.IsMutation() {
 		return a.fail(writer, invocation.Command.ID, contract.Invalid("execute_not_supported", "--execute is accepted only by mutation commands"))
+	}
+	if invocation.Options.DryRun && !invocation.Command.Effects.Effects.IsMutation() {
+		return a.fail(writer, invocation.Command.ID, contract.Invalid("dry_run_not_supported", "--dry-run is accepted only by mutation commands"))
 	}
 	writer.Options.MaximumBytes = invocation.Command.Output.MaximumEncodedOutputBytes
 	data, meta, err := a.execute(executionContext, invocation)
@@ -635,11 +645,22 @@ Usage:
   pmx clob price <token-id> --side BUY
   pmx clob midpoint|spread|book|tick-size|fee-rate|neg-risk|last-trade <token-id>
   pmx clob time
+  pmx auth status
+  pmx wallet create|import|list|show|use|remove|sign-message
+  pmx orders list|get|create|cancel|cancel-batch|cancel-market|cancel-all
+  pmx trades list
+  pmx balances get
+  pmx approvals check|set
+  pmx transactions inspect|submit
 
 Agent controls:
   --params JSON|-   Strict schema-checked request object
+  --output json     Emit the versioned machine-readable JSON envelope (default)
+  --json            Legacy alias for --output json
   --fields PATHS    Project data fields without hiding envelope metadata
   --compact         Emit one-line JSON
+  --dry-run         Explicitly plan a mutation without executing it (default)
+  --execute         Request a mutation; still requires controlling-TTY approval
   --timeout DURATION  Request timeout from 1ms to 1m
 
 Run "pmx schema" for the machine-readable command index.

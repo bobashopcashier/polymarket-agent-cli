@@ -19,7 +19,9 @@ type globalOptions struct {
 	HasParams bool
 	Fields    string
 	Compact   bool
+	DryRun    bool
 	Execute   bool
+	Output    string
 	Timeout   time.Duration
 	Help      bool
 	Version   bool
@@ -32,7 +34,7 @@ type invocation struct {
 }
 
 func parseGlobal(arguments []string) (globalOptions, []string, error) {
-	options := globalOptions{Timeout: 15 * time.Second}
+	options := globalOptions{Output: "json", Timeout: 15 * time.Second}
 	remaining := make([]string, 0, len(arguments))
 	seen := map[string]bool{}
 	for index := 0; index < len(arguments); index++ {
@@ -43,7 +45,7 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 		}
 		name, inline, hasInline := splitFlag(argument)
 		switch name {
-		case "--params", "--fields", "--timeout":
+		case "--params", "--fields", "--output", "--timeout":
 			if seen[name] {
 				return globalOptions{}, nil, contract.Invalid("duplicate_flag", fmt.Sprintf("%s may be supplied only once", name))
 			}
@@ -61,6 +63,14 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 				options.ParamsRaw, options.HasParams = value, true
 			case "--fields":
 				options.Fields = value
+			case "--output":
+				if seen["--json"] {
+					return globalOptions{}, nil, contract.Invalid("conflicting_inputs", "--output and --json are aliases and cannot be combined")
+				}
+				if value != "json" {
+					return globalOptions{}, nil, contract.Invalid("invalid_output_format", "--output must be json")
+				}
+				options.Output = value
 			case "--timeout":
 				duration, err := time.ParseDuration(value)
 				if err != nil || duration < time.Millisecond || duration > time.Minute {
@@ -68,7 +78,7 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 				}
 				options.Timeout = duration
 			}
-		case "--compact", "--execute":
+		case "--compact", "--dry-run", "--execute":
 			if hasInline {
 				return globalOptions{}, nil, contract.Invalid("invalid_flag", fmt.Sprintf("%s does not accept a value", name))
 			}
@@ -78,6 +88,8 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 			seen[name] = true
 			if name == "--compact" {
 				options.Compact = true
+			} else if name == "--dry-run" {
+				options.DryRun = true
 			} else {
 				options.Execute = true
 			}
@@ -85,6 +97,13 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 			if hasInline {
 				return globalOptions{}, nil, contract.Invalid("invalid_flag", "--json does not accept a value")
 			}
+			if seen[name] {
+				return globalOptions{}, nil, contract.Invalid("duplicate_flag", fmt.Sprintf("%s may be supplied only once", name))
+			}
+			if seen["--output"] {
+				return globalOptions{}, nil, contract.Invalid("conflicting_inputs", "--output and --json are aliases and cannot be combined")
+			}
+			seen[name] = true
 		case "--help", "-h":
 			options.Help = true
 		case "--version":
@@ -92,6 +111,9 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 		default:
 			remaining = append(remaining, argument)
 		}
+	}
+	if options.DryRun && options.Execute {
+		return globalOptions{}, nil, contract.Invalid("conflicting_inputs", "--dry-run and --execute cannot be combined")
 	}
 	return options, remaining, nil
 }

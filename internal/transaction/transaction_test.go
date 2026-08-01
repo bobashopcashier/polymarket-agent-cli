@@ -75,7 +75,15 @@ func TestParseFileRejectsRelativeAndSymlink(t *testing.T) {
 	if _, err := ParseFile("relative.hex"); err == nil {
 		t.Fatal("expected relative path rejection")
 	}
-	target := filepath.Join(t.TempDir(), "target")
+	directory := t.TempDir()
+	traversal := directory + string(os.PathSeparator) + "nested" + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "target"
+	if _, err := ParseFile(traversal); err == nil {
+		t.Fatal("expected path traversal rejection")
+	}
+	if _, err := ParseFile(filepath.Join(directory, "target") + "?raw=1"); err == nil {
+		t.Fatal("expected query syntax rejection")
+	}
+	target := filepath.Join(directory, "target")
 	if err := os.WriteFile(target, []byte("00"), 0o600); err != nil {
 		t.Fatal(err)
 	}

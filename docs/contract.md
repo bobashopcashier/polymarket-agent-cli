@@ -39,7 +39,8 @@ callback returns.
 
 ## Output
 
-Command output is JSON. Successful data is written only to stdout; error
+Command output is JSON. `--output json` makes that contract explicit; `--json`
+remains a compatibility alias and cannot be combined with `--output`. Successful data is written only to stdout; error
 envelopes are written only to stderr. Success uses `pmx.response/v1`, errors use
 `pmx.error/v1`, and realized effects are always present under `meta.effects`.
 
@@ -57,7 +58,7 @@ content.
 Every mutation supports two invocation states:
 
 ```text
-validated request -> dry-run plan
+validated request [+ --dry-run] -> dry-run plan
 validated request + --execute -> controlling-TTY authorization -> protected action
 ```
 

@@ -193,6 +193,7 @@ func localReadCommand(id string, path []string, summary string, fields []registr
 
 func mutationCommand(id string, path []string, summary string, agentInvocable bool, effects contract.Effects, fields []registry.FieldSpec, sample registry.Example) registry.CommandSpec {
 	spec := baseCommand(id, path, summary, agentInvocable, fields, registry.AuthCLOBTrade, effects)
+	spec.Params.OutputControls = append(spec.Params.OutputControls, "--dry-run", "--execute")
 	spec.Effects = registry.EffectSpec{Effects: effects, DryRun: true, Preflight: false, Confirmation: registry.ConfirmationTTY, Idempotent: stringsHasCancel(id)}
 	spec.Examples = []registry.Example{sample}
 	return spec
@@ -201,6 +202,7 @@ func mutationCommand(id string, path []string, summary string, agentInvocable bo
 func localMutationCommand(id string, path []string, summary string, agentInvocable bool, mutation contract.MutationKind, fields []registry.FieldSpec, sample registry.Example) registry.CommandSpec {
 	effects := contract.Effects{Network: contract.NetworkNone, Mutation: mutation, Signing: mutation == contract.MutationSignature, Financial: mutation == contract.MutationSignature || mutation == contract.MutationCredential, Broadcast: false, Reversible: mutation == contract.MutationCredential, Risk: contract.RiskCritical}
 	spec := baseCommand(id, path, summary, agentInvocable, fields, registry.AuthSigner, effects)
+	spec.Params.OutputControls = append(spec.Params.OutputControls, "--dry-run", "--execute")
 	spec.Effects = registry.EffectSpec{Effects: effects, DryRun: true, Confirmation: registry.ConfirmationTTY, Idempotent: false}
 	spec.Examples = []registry.Example{sample}
 	return spec
@@ -209,7 +211,7 @@ func localMutationCommand(id string, path []string, summary string, agentInvocab
 func baseCommand(id string, path []string, summary string, agentInvocable bool, fields []registry.FieldSpec, auth registry.AuthMode, effects contract.Effects) registry.CommandSpec {
 	return registry.CommandSpec{
 		ID: id, Path: path, Summary: summary, AgentInvocable: agentInvocable,
-		Params:   registry.ObjectSpec{MaximumBytes: 64 << 10, AdditionalProperties: false, OutputControls: []string{"--json", "--compact", "--fields", "--execute"}, Fields: fields},
+		Params:   registry.ObjectSpec{MaximumBytes: 64 << 10, AdditionalProperties: false, OutputControls: []string{"--output", "--json", "--compact", "--fields"}, Fields: fields},
 		Response: registry.ValueSpec{Kind: registry.KindObject, AdditionalProperties: true},
 		Auth:     registry.AuthSpec{Mode: auth, ProfileRequired: auth != registry.AuthNone},
 		Effects:  registry.EffectSpec{Effects: effects, Confirmation: registry.ConfirmationNone, Idempotent: true},
@@ -218,7 +220,10 @@ func baseCommand(id string, path []string, summary string, agentInvocable bool, 
 }
 
 func authenticatedListFields() []registry.FieldSpec {
-	return []registry.FieldSpec{walletField(), conditionField("market", false), tokenFieldOptional(), stringField("cursor", false, 256, "Provider pagination cursor")}
+	cursor := stringField("cursor", false, 256, "Opaque provider pagination cursor")
+	cursor.Pattern = `^[A-Za-z0-9._~+/=][A-Za-z0-9._~+/=-]{0,255}$`
+	cursor.Format = "opaque-cursor"
+	return []registry.FieldSpec{walletField(), conditionField("market", false), tokenFieldOptional(), cursor}
 }
 
 func walletField() registry.FieldSpec { return walletNameField(false) }
@@ -282,7 +287,7 @@ func enumFieldDefault(name string, values []string, defaultValue, description st
 }
 
 func rawTransactionFileField() registry.FieldSpec {
-	return registry.FieldSpec{Name: "rawTransactionFile", Flag: "raw-transaction-file", Kind: registry.KindString, Required: true, MaxBytes: 4096, Normalize: registry.NormalizeTrim, Description: "Path to a bounded signed-transaction file; signed bytes are never accepted in argv or --params"}
+	return registry.FieldSpec{Name: "rawTransactionFile", Flag: "raw-transaction-file", Kind: registry.KindString, Required: true, Format: "absolute-normalized-private-file", MaxBytes: 4096, Normalize: registry.NormalizeTrim, Description: "Absolute normalized path to a bounded private signed-transaction file; query, fragment, and traversal syntax is forbidden"}
 }
 
 func example(summary, command string, parameters any) registry.Example {

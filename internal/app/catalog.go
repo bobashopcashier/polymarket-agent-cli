@@ -78,6 +78,14 @@ func newCommandRegistry() (*registry.Registry, error) {
 		id := specs[index].ID
 		specs[index].NewRequest = func() any { return newRequest(id) }
 		specs[index].Output.ResponseFields = responseFields(id)
+		controls := []string{"--output", "--json", "--compact"}
+		if len(specs[index].Output.ResponseFields) != 0 {
+			controls = append(controls, "--fields")
+		}
+		if specs[index].Effects.Effects.IsMutation() {
+			controls = append(controls, "--dry-run", "--execute")
+		}
+		specs[index].Params.OutputControls = controls
 		if len(specs[index].Examples) == 0 {
 			specs[index].Examples = commandExamples(id)
 		}
@@ -166,11 +174,14 @@ func responseFields(id string) []string {
 		return []string{"data", "data.id", "data.status", "data.owner", "data.maker_address", "data.market", "data.asset_id", "data.side", "data.price", "data.original_size", "data.size_matched", "data.associate_trades", "data.outcome", "data.order_type", "data.created_at", "data.expiration", "next_cursor"}
 	case "trades.list":
 		return []string{"data", "data.id", "data.taker_order_id", "data.market", "data.asset_id", "data.side", "data.size", "data.price", "data.fee_rate_bps", "data.status", "data.match_time", "data.last_update", "data.outcome", "data.bucket_index", "data.owner", "data.maker_address", "data.maker_orders", "data.trader_side", "data.transaction_hash", "data.error_msg", "next_cursor"}
-	case "orders.get", "orders.create", "orders.cancel", "orders.cancel-batch", "orders.cancel-market", "orders.cancel-all", "balances.get", "approvals.check", "approvals.set":
-		if id == "orders.create" || id == "orders.cancel" || id == "orders.cancel-batch" || id == "orders.cancel-market" || id == "orders.cancel-all" || id == "approvals.set" {
-			return mutationResponseFields()
-		}
-		return nil
+	case "orders.get":
+		return []string{"id", "status", "owner", "maker_address", "market", "asset_id", "side", "price", "original_size", "size_matched", "outcome", "order_type", "created_at", "expiration", "associate_trades"}
+	case "balances.get":
+		return []string{"balance", "allowances"}
+	case "approvals.check":
+		return []string{"contract", "address", "collateral", "collateral_allowance", "collateral_approved", "collateral_error", "ctf_required", "ctf_approved", "ctf_error"}
+	case "orders.create", "orders.cancel", "orders.cancel-batch", "orders.cancel-market", "orders.cancel-all", "approvals.set":
+		return mutationResponseFields()
 	default:
 		return nil
 	}
@@ -244,7 +255,7 @@ func readCommand(id string, path []string, summary string, fields []registry.Fie
 		ID: id, Path: path, Summary: summary, AgentInvocable: true,
 		Params: registry.ObjectSpec{
 			MaximumBytes: 64 << 10, AdditionalProperties: false,
-			OutputControls: []string{"--json", "--compact", "--fields"}, Fields: fields,
+			OutputControls: []string{"--output", "--json", "--compact", "--fields"}, Fields: fields,
 		},
 		Response: response,
 		Auth:     registry.AuthSpec{Mode: registry.AuthNone},
@@ -286,12 +297,18 @@ func marketListFields() []registry.FieldSpec {
 
 func eventListFields() []registry.FieldSpec {
 	fields := marketListFields()
-	fields = append(fields, stringField("tag", false, 128, "Tag slug filter"))
+	tag := stringField("tag", false, 128, "Tag slug filter")
+	tag.Pattern = `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`
+	tag.Format = "slug"
+	fields = append(fields, tag)
 	return fields
 }
 
 func resourceField() registry.FieldSpec {
-	return stringField("id", true, 256, "Numeric resource ID or slug")
+	field := stringField("id", true, 200, "Positive numeric resource ID or slug; URL, query, fragment, and traversal syntax is forbidden")
+	field.Pattern = `^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$`
+	field.Format = "positive-decimal-id-or-slug"
+	return field
 }
 
 func tokenField() registry.FieldSpec {

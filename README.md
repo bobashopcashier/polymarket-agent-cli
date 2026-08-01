@@ -17,13 +17,15 @@ separate typed confirmation on the controlling terminal.
 
 Agents need a stricter contract than a human-oriented terminal program:
 
-- JSON is the default in every environment.
+- JSON is the default in every environment, and `--output json` makes that
+  machine-readable contract explicit.
 - Every operation publishes an offline runtime schema.
 - `--params` accepts one strict, API-shaped JSON object or bounded stdin.
 - Output, provider payloads, and collections are bounded.
 - Errors have stable codes, exit classes, and retryability signals.
 - Provider strings are sanitized and always treated as untrusted data.
-- Mutations dry-run by default and publish realized effects.
+- Mutations dry-run by default, accept explicit `--dry-run`, and publish
+  realized effects.
 - `--execute` is not sufficient by itself; an operator must authorize the
   exact fingerprint from the controlling terminal.
 
@@ -150,14 +152,7 @@ pmx approvals check --params '{}'
 Every mutation plans by default:
 
 ```bash
-pmx orders create --params '{
-  "tokenId":"1234567890",
-  "side":"BUY",
-  "price":"0.45",
-  "size":"10",
-  "maxNotionalPusd":"5",
-  "clientRequestId":"order-20260731-001"
-}'
+pmx orders create --dry-run --output json --params '{"tokenId":"1234567890","side":"BUY","price":"0.45","size":"10","maxNotionalPusd":"5","clientRequestId":"order-20260731-001"}'
 ```
 
 The response contains `dryRun:true`, `executes:false`, the normalized request,
@@ -167,14 +162,7 @@ and post-only in this release. To execute the same request, add `--execute` and
 authorize its newly displayed fingerprint on the controlling terminal:
 
 ```bash
-pmx orders create --execute --params '{
-  "tokenId":"1234567890",
-  "side":"BUY",
-  "price":"0.45",
-  "size":"10",
-  "maxNotionalPusd":"5",
-  "clientRequestId":"order-20260731-001"
-}'
+pmx orders create --execute --params '{"tokenId":"1234567890","side":"BUY","price":"0.45","size":"10","maxNotionalPusd":"5","clientRequestId":"order-20260731-001"}'
 ```
 
 Supported mutations:
@@ -205,10 +193,7 @@ EIP-191 personal-message signing is operator-restricted by the published
 contract:
 
 ```bash
-pmx wallet sign-message --execute --params '{
-  "message":"example.com login nonce 123",
-  "clientRequestId":"sign-001"
-}'
+pmx wallet sign-message --execute --params '{"message":"example.com login nonce 123","clientRequestId":"sign-001"}'
 ```
 
 Signed transaction files can be inspected without a network call. The path
@@ -227,11 +212,7 @@ before authorization, then attests the fixed RPC endpoint's chain ID before
 broadcasting:
 
 ```bash
-pmx transactions submit --execute --params '{
-  "rawTransactionFile":"/secure/path/transaction.hex",
-  "scope":"ARBITRARY_POLYGON_TRANSACTION",
-  "clientRequestId":"tx-001"
-}'
+pmx transactions submit --execute --params '{"rawTransactionFile":"/secure/path/transaction.hex","scope":"ARBITRARY_POLYGON_TRANSACTION","clientRequestId":"tx-001"}'
 ```
 
 ## Public data
