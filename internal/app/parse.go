@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,7 +18,11 @@ type globalOptions struct {
 	ParamsRaw string
 	HasParams bool
 	Fields    string
+	HasFields bool
 	Compact   bool
+	DryRun    bool
+	Execute   bool
+	Output    string
 	Timeout   time.Duration
 	Help      bool
 	Version   bool
@@ -30,7 +35,7 @@ type invocation struct {
 }
 
 func parseGlobal(arguments []string) (globalOptions, []string, error) {
-	options := globalOptions{Timeout: 15 * time.Second}
+	options := globalOptions{Output: "json", Timeout: 15 * time.Second}
 	remaining := make([]string, 0, len(arguments))
 	seen := map[string]bool{}
 	for index := 0; index < len(arguments); index++ {
@@ -41,7 +46,7 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 		}
 		name, inline, hasInline := splitFlag(argument)
 		switch name {
-		case "--params", "--fields", "--timeout":
+		case "--params", "--fields", "--output", "--timeout":
 			if seen[name] {
 				return globalOptions{}, nil, contract.Invalid("duplicate_flag", fmt.Sprintf("%s may be supplied only once", name))
 			}
@@ -58,7 +63,15 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 			case "--params":
 				options.ParamsRaw, options.HasParams = value, true
 			case "--fields":
-				options.Fields = value
+				options.Fields, options.HasFields = value, true
+			case "--output":
+				if seen["--json"] {
+					return globalOptions{}, nil, contract.Invalid("conflicting_inputs", "--output and --json are aliases and cannot be combined")
+				}
+				if value != "json" {
+					return globalOptions{}, nil, contract.Invalid("invalid_output_format", "--output must be json")
+				}
+				options.Output = value
 			case "--timeout":
 				duration, err := time.ParseDuration(value)
 				if err != nil || duration < time.Millisecond || duration > time.Minute {
@@ -66,15 +79,32 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 				}
 				options.Timeout = duration
 			}
-		case "--compact":
+		case "--compact", "--dry-run", "--execute":
 			if hasInline {
-				return globalOptions{}, nil, contract.Invalid("invalid_flag", "--compact does not accept a value")
+				return globalOptions{}, nil, contract.Invalid("invalid_flag", fmt.Sprintf("%s does not accept a value", name))
 			}
-			options.Compact = true
+			if seen[name] {
+				return globalOptions{}, nil, contract.Invalid("duplicate_flag", fmt.Sprintf("%s may be supplied only once", name))
+			}
+			seen[name] = true
+			if name == "--compact" {
+				options.Compact = true
+			} else if name == "--dry-run" {
+				options.DryRun = true
+			} else {
+				options.Execute = true
+			}
 		case "--json":
 			if hasInline {
 				return globalOptions{}, nil, contract.Invalid("invalid_flag", "--json does not accept a value")
 			}
+			if seen[name] {
+				return globalOptions{}, nil, contract.Invalid("duplicate_flag", fmt.Sprintf("%s may be supplied only once", name))
+			}
+			if seen["--output"] {
+				return globalOptions{}, nil, contract.Invalid("conflicting_inputs", "--output and --json are aliases and cannot be combined")
+			}
+			seen[name] = true
 		case "--help", "-h":
 			options.Help = true
 		case "--version":
@@ -83,10 +113,13 @@ func parseGlobal(arguments []string) (globalOptions, []string, error) {
 			remaining = append(remaining, argument)
 		}
 	}
+	if options.DryRun && options.Execute {
+		return globalOptions{}, nil, contract.Invalid("conflicting_inputs", "--dry-run and --execute cannot be combined")
+	}
 	return options, remaining, nil
 }
 
-func parseInvocation(arguments []string, stdin io.Reader, commands *registry.Registry) (invocation, error) {
+func parseInvocation(ctx context.Context, arguments []string, stdin io.Reader, commands *registry.Registry) (invocation, error) {
 	if err := params.RejectArgumentControls(arguments); err != nil {
 		return invocation{}, err
 	}
@@ -104,11 +137,7 @@ func parseInvocation(arguments []string, stdin io.Reader, commands *registry.Reg
 		requestStart = 2
 	}
 	if !ok {
-		candidate := remaining
-		if len(candidate) > 2 {
-			candidate = candidate[:2]
-		}
-		return invocation{}, contract.Invalid("unknown_command", fmt.Sprintf("unknown command %q", strings.Join(candidate, " ")))
+		return invocation{}, contract.Invalid("unknown_command", "unknown command; run pmx schema for supported command paths")
 	}
 	requestTokens := remaining[requestStart:]
 	request := command.NewRequest()
@@ -119,7 +148,7 @@ func parseInvocation(arguments []string, stdin io.Reader, commands *registry.Reg
 		if err := params.EnsureParamsExclusive(true, requestTokens); err != nil {
 			return invocation{}, err
 		}
-		raw, err := params.ReadSource(options.ParamsRaw, stdin, command.Params.MaximumBytes)
+		raw, err := params.ReadSourceContext(ctx, options.ParamsRaw, stdin, command.Params.MaximumBytes)
 		if err != nil {
 			return invocation{}, err
 		}

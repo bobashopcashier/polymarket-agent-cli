@@ -9,14 +9,20 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/bobashopcashier/polymarket-agent-cli/internal/console"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/contract"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/httpx"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/output"
+	"github.com/bobashopcashier/polymarket-agent-cli/internal/params"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/provider"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/registry"
 	"github.com/bobashopcashier/polymarket-agent-cli/internal/sanitize"
+	"github.com/bobashopcashier/polymarket-agent-cli/internal/transaction"
+	"github.com/bobashopcashier/polymarket-agent-cli/internal/upstream"
+	"github.com/bobashopcashier/polymarket-agent-cli/internal/wallet"
 )
 
 type Dependencies struct {
@@ -24,6 +30,10 @@ type Dependencies struct {
 	Stdout     io.Writer
 	Stderr     io.Writer
 	HTTPClient *http.Client
+	Console    console.Console
+	Wallets    *wallet.Manager
+	Upstream   *upstream.Runner
+	TxSender   *transaction.Sender
 }
 
 type App struct {
@@ -32,6 +42,10 @@ type App struct {
 	stderr     io.Writer
 	httpClient *http.Client
 	commands   *registry.Registry
+	console    console.Console
+	wallets    *wallet.Manager
+	upstream   *upstream.Runner
+	txSender   *transaction.Sender
 }
 
 func New(dependencies Dependencies) (*App, error) {
@@ -48,20 +62,90 @@ func New(dependencies Dependencies) (*App, error) {
 	if dependencies.Stderr == nil {
 		dependencies.Stderr = os.Stderr
 	}
+	if dependencies.Console == nil {
+		dependencies.Console = console.TTY{}
+	}
+	if dependencies.Wallets == nil {
+		manager, managerErr := defaultWalletManager()
+		if managerErr != nil {
+			return nil, managerErr
+		}
+		dependencies.Wallets = manager
+	}
+	if dependencies.Upstream == nil {
+		dependencies.Upstream = discoverUpstream()
+	}
+	if dependencies.TxSender == nil {
+		dependencies.TxSender = &transaction.Sender{Client: dependencies.HTTPClient}
+	}
 	return &App{
 		stdin: dependencies.Stdin, stdout: dependencies.Stdout, stderr: dependencies.Stderr,
-		httpClient: dependencies.HTTPClient, commands: commands,
+		httpClient: dependencies.HTTPClient, commands: commands, console: dependencies.Console,
+		wallets: dependencies.Wallets, upstream: dependencies.Upstream, txSender: dependencies.TxSender,
 	}, nil
 }
 
+func defaultWalletManager() (*wallet.Manager, error) {
+	configurationDirectory, err := os.UserConfigDir()
+	if err != nil || configurationDirectory == "" {
+		return nil, contract.Internal("could not locate the user configuration directory", err)
+	}
+	store, err := wallet.NewKeyringStore("pmx.polymarket")
+	if err != nil {
+		return nil, contract.Internal("could not configure the operating-system keychain", err)
+	}
+	manager, err := wallet.NewManager(filepath.Join(configurationDirectory, "pmx", "wallets.json"), store)
+	if err != nil {
+		return nil, contract.Internal("could not configure wallet metadata", err)
+	}
+	return manager, nil
+}
+
+func discoverUpstream() *upstream.Runner {
+	path := strings.TrimSpace(os.Getenv("PMX_POLYMARKET_BIN"))
+	if path == "" {
+		return nil
+	}
+	if !filepath.IsAbs(path) {
+		return nil
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(absolute))
+	if err != nil {
+		return nil
+	}
+	runner, err := upstream.New(upstream.Options{ExecutablePath: resolved})
+	if err != nil {
+		return nil
+	}
+	return runner
+}
+
 func (a *App) Run(ctx context.Context, arguments []string) int {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	options, remaining, parseErr := parseGlobal(arguments)
 	writer := output.NewWriter(a.stdout, a.stderr, output.Options{
-		Format: output.FormatJSON, Compact: options.Compact, Fields: options.Fields,
+		Format: output.FormatJSON, Compact: options.Compact, Fields: options.Fields, FieldsSet: options.HasFields,
 		MaximumBytes: output.DefaultMaximumBytes,
 	})
 	if parseErr != nil {
 		return a.fail(writer, "", parseErr)
+	}
+	if err := params.RejectArgumentControls(arguments); err != nil {
+		return a.fail(writer, commandHint(remaining), err)
+	}
+	executionContext, cancel := context.WithTimeout(ctx, options.Timeout)
+	defer cancel()
+	if options.Execute && (options.Version || options.Help || len(remaining) == 0 || remaining[0] == "version" || remaining[0] == "help" || remaining[0] == "schema") {
+		return a.fail(writer, commandHint(remaining), contract.Invalid("execute_not_supported", "--execute is accepted only by mutation commands"))
+	}
+	if options.DryRun && (options.Version || options.Help || len(remaining) == 0 || remaining[0] == "version" || remaining[0] == "help" || remaining[0] == "schema") {
+		return a.fail(writer, commandHint(remaining), contract.Invalid("dry_run_not_supported", "--dry-run is accepted only by mutation commands"))
 	}
 	if options.Version || len(remaining) == 1 && remaining[0] == "version" {
 		if err := output.WriteJSON(a.stdout, map[string]any{"name": "pmx", "version": version}, options.Compact, output.DefaultMaximumBytes); err != nil {
@@ -76,23 +160,29 @@ func (a *App) Run(ctx context.Context, arguments []string) int {
 		return 0
 	}
 	if remaining[0] == "schema" {
-		if options.HasParams || options.Fields != "" {
+		if options.HasParams || options.HasFields {
 			return a.fail(writer, "schema", contract.Invalid("conflicting_inputs", "schema does not accept --params or --fields"))
 		}
 		return a.runSchema(writer, remaining[1:])
 	}
 
-	invocation, err := parseInvocation(arguments, a.stdin, a.commands)
+	invocation, err := parseInvocation(executionContext, arguments, a.stdin, a.commands)
 	if err != nil {
-		return a.fail(writer, commandHint(remaining), err)
+		return a.fail(writer, commandHint(remaining), mapExecutionError(err))
 	}
-	if invocation.Options.Fields != "" {
+	if invocation.Options.HasFields {
 		if err := output.ValidateFieldMask(invocation.Options.Fields, invocation.Command.Output.ResponseFields); err != nil {
 			return a.fail(writer, invocation.Command.ID, err)
 		}
 	}
+	if invocation.Options.Execute && !invocation.Command.Effects.Effects.IsMutation() {
+		return a.fail(writer, invocation.Command.ID, contract.Invalid("execute_not_supported", "--execute is accepted only by mutation commands"))
+	}
+	if invocation.Options.DryRun && !invocation.Command.Effects.Effects.IsMutation() {
+		return a.fail(writer, invocation.Command.ID, contract.Invalid("dry_run_not_supported", "--dry-run is accepted only by mutation commands"))
+	}
 	writer.Options.MaximumBytes = invocation.Command.Output.MaximumEncodedOutputBytes
-	data, meta, err := a.execute(ctx, invocation)
+	data, meta, err := a.execute(executionContext, invocation)
 	if err != nil {
 		return a.fail(writer, invocation.Command.ID, mapExecutionError(err))
 	}
@@ -129,6 +219,12 @@ func (a *App) runSchema(writer *output.Writer, path []string) int {
 }
 
 func (a *App) execute(ctx context.Context, invocation invocation) (any, contract.Meta, error) {
+	if invocation.Command.Effects.Effects.IsMutation() {
+		return a.executeMutation(ctx, invocation)
+	}
+	if isManagedRead(invocation.Command.ID) {
+		return a.executeManagedRead(ctx, invocation)
+	}
 	providerLimit := invocation.Command.Output.MaximumProviderBytes
 	client, err := httpx.New(httpx.Options{
 		HTTPClient: a.httpClient, RequestTimeout: invocation.Options.Timeout,
@@ -165,11 +261,28 @@ func (a *App) execute(ctx context.Context, invocation invocation) (any, contract
 		if err != nil {
 			return nil, contract.Meta{}, err
 		}
+		wallets, err := a.wallets.List(ctx)
+		if err != nil {
+			return nil, contract.Meta{}, err
+		}
+		configured := false
+		secretReady := false
+		if len(wallets) != 0 {
+			if active, activeErr := a.wallets.Active(ctx); activeErr == nil {
+				configured = active.SignatureType == wallet.SignatureEOA
+				if configured {
+					_, checkErr := a.wallets.Check(ctx, active.Name)
+					secretReady = checkErr == nil
+				}
+			} else if !errors.Is(activeErr, wallet.ErrNoActiveWallet) {
+				return nil, contract.Meta{}, activeErr
+			}
+		}
 		data := map[string]any{
 			"ready":          true,
 			"gamma":          map[string]any{"reachable": true, "sampleItems": collectionCount(gammaData)},
 			"clob":           map[string]any{"reachable": true, "status": clobData},
-			"authentication": map[string]any{"required": false, "configured": false, "tradingEnabled": false},
+			"authentication": map[string]any{"required": false, "configured": configured, "secretReady": secretReady, "tradingEnabled": configured && secretReady && a.upstream != nil},
 		}
 		safeData, err := sanitize.Value(data)
 		if err != nil {
@@ -264,6 +377,19 @@ func boundResult(command registry.CommandSpec, value any) (any, []contract.Trunc
 	if items, ok := value.([]any); ok && len(items) > limit {
 		sourceCount := len(items)
 		return items[:limit], []contract.Truncation{{Path: "data", Reason: "item_limit", SourceCount: &sourceCount, EmittedCount: limit}}
+	}
+	if command.ID == "orders.list" || command.ID == "trades.list" {
+		result, ok := value.(map[string]any)
+		if !ok {
+			return value, nil
+		}
+		items, ok := result["data"].([]any)
+		if !ok || len(items) <= limit {
+			return value, nil
+		}
+		sourceCount := len(items)
+		result["data"] = items[:limit]
+		return result, []contract.Truncation{{Path: "data.data", Reason: "item_limit", SourceCount: &sourceCount, EmittedCount: limit}}
 	}
 	if command.ID != "clob.book" {
 		if command.ID != "markets.search" {
@@ -372,6 +498,9 @@ func collectionCount(value any) int {
 		if events, ok := typed["events"].([]any); ok {
 			return len(events)
 		}
+		if data, ok := typed["data"].([]any); ok {
+			return len(data)
+		}
 	}
 	return 0
 }
@@ -387,9 +516,58 @@ func mapExecutionError(err error) error {
 	if errors.Is(err, context.Canceled) {
 		return contract.NewError("interrupted", contract.CategoryTransient, "operation was interrupted", contract.ExitInterrupted)
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		result := contract.NewError("timeout", contract.CategoryTransient, "operation timed out", contract.ExitTransient)
+		result.Retryable = true
+		return result
+	}
 	var validation *provider.ValidationError
 	if errors.As(err, &validation) {
 		return contract.Invalid("invalid_parameter", validation.Error())
+	}
+	if errors.Is(err, wallet.ErrWalletNotFound) || errors.Is(err, wallet.ErrNoActiveWallet) || errors.Is(err, wallet.ErrSecretNotFound) {
+		return contract.NewError("wallet_not_configured", contract.CategoryAuth, "the requested wallet profile or its secret is not configured", contract.ExitAuth)
+	}
+	if errors.Is(err, wallet.ErrWalletExists) {
+		return contract.Invalid("wallet_exists", "a wallet profile with that name already exists")
+	}
+	if errors.Is(err, wallet.ErrAddressMismatch) {
+		return contract.NewError("wallet_address_mismatch", contract.CategoryAuth, "the private key does not match the expected wallet address", contract.ExitAuth)
+	}
+	if errors.Is(err, wallet.ErrWalletChanged) {
+		return contract.PolicyDenied("wallet_changed", "wallet metadata changed after the operation was authorized")
+	}
+	if errors.Is(err, wallet.ErrInvalidSecret) {
+		return contract.NewError("invalid_private_key", contract.CategoryAuth, "the masked input is not a valid secp256k1 private key", contract.ExitAuth)
+	}
+	if errors.Is(err, wallet.ErrKeyringUnavailable) || errors.Is(err, wallet.ErrSecretStore) {
+		return contract.NewError("keychain_unavailable", contract.CategoryAuth, "the operating-system keychain is unavailable", contract.ExitAuth)
+	}
+	if errors.Is(err, wallet.ErrUnsafeMetadata) || errors.Is(err, wallet.ErrInvalidMetadata) {
+		return contract.PolicyDenied("unsafe_wallet_metadata", "wallet metadata failed its integrity or permission checks")
+	}
+	var upstreamError *upstream.Error
+	if errors.As(err, &upstreamError) {
+		switch upstreamError.Kind {
+		case upstream.ErrorInvalidConfig, upstream.ErrorStartFailed:
+			return upstreamUnavailable()
+		case upstream.ErrorInvalidCommand:
+			return contract.Invalid("invalid_upstream_request", upstreamError.Message)
+		case upstream.ErrorMissingSecret:
+			return contract.NewError("wallet_secret_unavailable", contract.CategoryAuth, "the wallet secret is unavailable", contract.ExitAuth)
+		case upstream.ErrorCanceled:
+			return contract.NewError("interrupted", contract.CategoryTransient, "the official Polymarket CLI was interrupted", contract.ExitInterrupted)
+		case upstream.ErrorTimeout:
+			result := contract.NewError("upstream_timeout", contract.CategoryTransient, "the official Polymarket CLI timed out", contract.ExitTransient)
+			result.Retryable = true
+			return result
+		case upstream.ErrorOutputTooLarge:
+			return contract.NewError("upstream_output_too_large", contract.CategoryProvider, "the official Polymarket CLI exceeded its output safety limit", contract.ExitRejected)
+		case upstream.ErrorInvalidJSON:
+			return contract.NewError("invalid_upstream_response", contract.CategoryProvider, "the official Polymarket CLI returned invalid JSON", contract.ExitRejected)
+		default:
+			return contract.NewError("upstream_rejected", contract.CategoryProvider, "the official Polymarket CLI rejected the request", contract.ExitRejected)
+		}
 	}
 	var transport *httpx.Error
 	if errors.As(err, &transport) {
@@ -447,10 +625,12 @@ func commandHint(arguments []string) string {
 	if len(arguments) == 0 {
 		return ""
 	}
-	if len(arguments) == 1 {
+	switch arguments[0] {
+	case "schema", "version", "help", "doctor", "markets", "events", "clob", "auth", "wallet", "orders", "trades", "balances", "approvals", "transactions":
 		return arguments[0]
+	default:
+		return ""
 	}
-	return arguments[0] + "." + arguments[1]
 }
 
 func helpText() string {
@@ -467,11 +647,22 @@ Usage:
   pmx clob price <token-id> --side BUY
   pmx clob midpoint|spread|book|tick-size|fee-rate|neg-risk|last-trade <token-id>
   pmx clob time
+  pmx auth status
+  pmx wallet create|import|list|show|use|remove|sign-message
+  pmx orders list|get|create|cancel|cancel-batch|cancel-market|cancel-all
+  pmx trades list
+  pmx balances get
+  pmx approvals check|set
+  pmx transactions inspect|submit
 
 Agent controls:
   --params JSON|-   Strict schema-checked request object
+  --output json     Emit the versioned machine-readable JSON envelope (default)
+  --json            Legacy alias for --output json
   --fields PATHS    Project data fields without hiding envelope metadata
   --compact         Emit one-line JSON
+  --dry-run         Explicitly plan a mutation without executing it (default)
+  --execute         Request a mutation; still requires controlling-TTY approval
   --timeout DURATION  Request timeout from 1ms to 1m
 
 Run "pmx schema" for the machine-readable command index.

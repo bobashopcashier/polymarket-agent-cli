@@ -49,6 +49,21 @@ func TestProjectEnvelopePreservesSafetyMetadata(t *testing.T) {
 	}
 }
 
+func TestExplicitEmptyFieldMaskFailsClosed(t *testing.T) {
+	envelope := contract.Success("markets.list", map[string]any{"id": "1"}, contract.Meta{})
+	if _, err := ProjectEnvelope(envelope, "", []string{"id"}); err == nil {
+		t.Fatal("expected empty field mask rejection")
+	}
+	var stdout, stderr bytes.Buffer
+	writer := NewWriter(&stdout, &stderr, Options{Format: FormatJSON, FieldsSet: true})
+	if err := writer.Success(envelope, []string{"id"}); err == nil {
+		t.Fatal("expected writer to reject an explicitly empty field mask")
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("writer emitted full response for empty field mask: %s", stdout.String())
+	}
+}
+
 func TestProjectEmptyCollectionAgainstSchema(t *testing.T) {
 	projected, err := ProjectData(map[string]any{"markets": []any{}}, "markets.id", []string{"markets.id"})
 	if err != nil {

@@ -32,6 +32,22 @@ func TestValidationHelpers(t *testing.T) {
 	}
 }
 
+func TestArgumentValidationRejectsCredentialFlagsWithoutInspectingValues(t *testing.T) {
+	if err := RejectArgumentControls([]string{"markets", "list", "--params", `{"q":"privateKey is ordinary text here"}`}); err != nil {
+		t.Fatalf("safe arguments rejected: %v", err)
+	}
+	for _, arguments := range [][]string{
+		{"--private-key", "do-not-reflect"},
+		{"--private_key=do-not-reflect"},
+		{"--apiKey", "do-not-reflect"},
+		{"--seed-phrase", "do-not-reflect"},
+	} {
+		if err := RejectArgumentControls(arguments); err == nil {
+			t.Fatalf("credential arguments accepted: %#v", arguments)
+		}
+	}
+}
+
 func FuzzRejectControls(f *testing.F) {
 	f.Add("plain")
 	f.Add("\x1b[2J")

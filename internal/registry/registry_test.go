@@ -17,6 +17,7 @@ func readCommand(id string) CommandSpec {
 		Params:   ObjectSpec{Fields: []FieldSpec{{Name: "tokenId", Kind: KindString, MaxBytes: 128}}},
 		Response: ValueSpec{Kind: KindObject},
 		Effects:  EffectSpec{Effects: contract.Effects{Network: contract.NetworkRead, Mutation: contract.MutationNone}},
+		Output:   OutputSpec{ResponseFields: []string{"tokenId"}},
 	}
 }
 
@@ -42,7 +43,7 @@ func TestRegistryIsDeterministicAndAppliesDefaults(t *testing.T) {
 	if len(index.Commands) != 1 || index.Commands[0].ID != "clob.book" {
 		t.Fatalf("unexpected index: %#v", index)
 	}
-	wantControls := []string{"--compact", "--fields", "--json", "--params", "--timeout"}
+	wantControls := []string{"--compact", "--fields", "--json", "--output", "--params", "--timeout"}
 	gotControls := make([]string, len(index.InvocationControls))
 	for index, control := range index.InvocationControls {
 		gotControls[index] = control.Name

@@ -20,6 +20,7 @@ type Options struct {
 	Format       Format
 	Compact      bool
 	Fields       string
+	FieldsSet    bool
 	MaximumBytes int64
 }
 
@@ -40,7 +41,7 @@ func (w *Writer) Success(envelope contract.SuccessEnvelope, allowedFields []stri
 	if w == nil || w.Stdout == nil {
 		return contract.Internal("stdout is not configured", nil)
 	}
-	if w.Options.Fields != "" {
+	if w.Options.FieldsSet {
 		projected, err := ProjectEnvelope(envelope, w.Options.Fields, allowedFields)
 		if err != nil {
 			return err

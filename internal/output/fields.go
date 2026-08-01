@@ -108,9 +108,6 @@ func ProjectData(value any, rawMask string, allowedPaths []string) (any, error) 
 }
 
 func ProjectEnvelope(envelope contract.SuccessEnvelope, rawMask string, allowedPaths []string) (contract.SuccessEnvelope, error) {
-	if strings.TrimSpace(rawMask) == "" {
-		return envelope, nil
-	}
 	projected, err := ProjectData(envelope.Data, rawMask, allowedPaths)
 	if err != nil {
 		return contract.SuccessEnvelope{}, err

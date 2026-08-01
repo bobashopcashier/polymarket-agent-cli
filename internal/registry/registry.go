@@ -85,17 +85,21 @@ func (r *Registry) LookupID(id string) (CommandSpec, bool) {
 func (r *Registry) Index(prefix ...string) IndexDocument {
 	prefix = normalizePath(prefix)
 	entries := make([]IndexEntry, 0)
+	allowsMutation := false
+	allowsFields := false
 	for _, command := range r.commands {
 		if hasPrefix(command.Path, prefix) {
 			entries = append(entries, IndexEntry{
 				ID: command.ID, Path: append([]string(nil), command.Path...), Summary: command.Summary,
 				AgentInvocable: command.AgentInvocable, Auth: command.Auth, Effects: command.Effects,
 			})
+			allowsMutation = allowsMutation || command.Effects.Effects.IsMutation()
+			allowsFields = allowsFields || len(command.Output.ResponseFields) != 0
 		}
 	}
 	return IndexDocument{
 		SchemaVersion: CommandIndexSchemaVersion, CLIVersion: r.version,
-		Prefix: append([]string(nil), prefix...), InvocationControls: invocationControls(), Commands: entries,
+		Prefix: append([]string(nil), prefix...), InvocationControls: invocationControls(allowsMutation, allowsFields), Commands: entries,
 	}
 }
 
@@ -111,44 +115,66 @@ func (r *Registry) Schema(path ...string) (SchemaDocument, bool) {
 		SchemaVersion: CommandSchemaVersion, CLIVersion: r.version,
 		ID: command.ID, Path: command.Path, Summary: command.Summary, AgentInvocable: command.AgentInvocable, Params: command.Params,
 		Response: command.Response, Auth: command.Auth, Effects: command.Effects,
-		Output: command.Output, Pagination: command.Pagination, InvocationControls: invocationControls(), Examples: command.Examples,
+		Output: command.Output, Pagination: command.Pagination,
+		InvocationControls: invocationControls(command.Effects.Effects.IsMutation(), len(command.Output.ResponseFields) != 0), Examples: command.Examples,
 		ErrorCodes: []string{
-			"authentication_failed", "conflicting_inputs", "credential_parameter", "duplicate_flag",
-			"duplicate_parameter", "internal_error", "interrupted", "invalid_fields", "invalid_flag", "invalid_flag_value",
+			"authentication_failed", "conflicting_inputs", "credential_parameter", "dry_run_not_supported", "duplicate_flag",
+			"duplicate_parameter", "execute_not_supported", "human_authorization_required", "internal_error", "interrupted", "invalid_fields", "invalid_flag", "invalid_flag_value",
+			"invalid_decimal", "invalid_order_exposure", "invalid_output_format", "invalid_private_key",
 			"invalid_parameter", "invalid_parameter_type", "invalid_parameter_value", "invalid_params",
-			"invalid_provider_response", "invalid_timeout", "missing_command",
+			"invalid_provider_response", "invalid_resource_id", "invalid_schema_path", "invalid_signed_transaction", "invalid_timeout",
+			"invalid_upstream_request", "invalid_upstream_response", "keychain_unavailable", "missing_command",
 			"missing_flag_value", "missing_parameter", "not_found", "output_too_large", "parameter_too_large", "provider_rejected",
-			"provider_response_too_large", "provider_unavailable", "rate_limited", "sanitized_key_collision",
-			"timeout", "too_many_arguments", "unknown_command", "unknown_field", "unknown_flag", "unknown_parameter",
-			"unsafe_input", "unsupported_flag",
+			"mutation_indeterminate", "order_notional_exceeded", "policy_denied", "provider_response_too_large", "provider_unavailable", "rate_limited", "sanitized_key_collision",
+			"secret_input_unavailable", "timeout", "too_many_arguments", "unknown_command", "unknown_field", "unknown_flag", "unknown_parameter",
+			"unsafe_input", "unsafe_wallet_metadata", "unsupported_flag", "unsupported_wallet_type", "upstream_not_configured",
+			"upstream_output_too_large", "upstream_rejected", "upstream_timeout", "wallet_address_mismatch", "wallet_changed",
+			"wallet_exists", "wallet_not_configured", "wallet_secret_unavailable", "wrong_chain",
 		},
 	}, true
 }
 
-func invocationControls() []InvocationControl {
-	return []InvocationControl{
+func invocationControls(allowsMutation, allowsFields bool) []InvocationControl {
+	controls := []InvocationControl{
 		{
 			Name: "--compact", Type: KindBoolean, Default: false,
 			Description: "Emit single-line JSON without indentation",
 		},
-		{
+	}
+	if allowsMutation {
+		controls = append(controls, InvocationControl{
+			Name: "--dry-run", Type: KindBoolean, Default: true, ConflictsWith: []string{"--execute"},
+			Description: "Explicitly plan a mutation without executing it; mutation commands dry-run by default",
+		}, InvocationControl{
+			Name: "--execute", Type: KindBoolean, Default: false,
+			Description: "Execute a mutation after controlling-terminal operator confirmation; mutations dry-run by default",
+		})
+	}
+	if allowsFields {
+		controls = append(controls, InvocationControl{
 			Name: "--fields", Type: KindString, MaximumBytes: 1024,
 			Description: "Project response fields under data while retaining safety metadata",
+		})
+	}
+	return append(controls,
+		InvocationControl{
+			Name: "--json", Type: KindBoolean,
+			ConflictsWith: []string{"--output"}, Description: "Legacy alias for --output json",
 		},
-		{
-			Name: "--json", Type: KindBoolean, Default: true,
-			Description: "Emit the versioned machine-readable JSON envelope",
+		InvocationControl{
+			Name: "--output", Type: KindString, Format: "json", Default: "json",
+			ConflictsWith: []string{"--json"}, Description: "Emit the versioned machine-readable JSON envelope; json is the only accepted value",
 		},
-		{
+		InvocationControl{
 			Name: "--params", Type: KindString, Format: "json-object-or-stdin", MaximumBytes: defaultMaximumBytes,
 			ConflictsWith: []string{"positionals", "convenience-request-flags"},
 			Description:   "Invoke the command from one strict JSON object, or read it from stdin with '-'",
 		},
-		{
+		InvocationControl{
 			Name: "--timeout", Type: KindString, Format: "duration", Default: "15s", Maximum: "1m",
 			Description: "Bound the complete command execution time",
 		},
-	}
+	)
 }
 
 func (r *Registry) reindex() {
@@ -255,8 +281,8 @@ func validateCommand(command CommandSpec) error {
 		if !command.Effects.DryRun {
 			return fmt.Errorf("mutation command %q must support dry-run", command.ID)
 		}
-		if command.Effects.Confirmation != ConfirmationPlanHash {
-			return fmt.Errorf("mutation command %q must require plan-hash confirmation", command.ID)
+		if command.Effects.Confirmation != ConfirmationPlanHash && command.Effects.Confirmation != ConfirmationTTY {
+			return fmt.Errorf("mutation command %q must require plan-hash or controlling-terminal confirmation", command.ID)
 		}
 	}
 	return nil
@@ -270,7 +296,7 @@ func applyDefaults(command *CommandSpec) {
 		command.Params.ConflictRule = "cannot be combined with positional arguments or convenience request flags"
 	}
 	if len(command.Params.OutputControls) == 0 {
-		command.Params.OutputControls = []string{"--json", "--compact", "--fields"}
+		command.Params.OutputControls = []string{"--output", "--json", "--compact", "--fields"}
 		if command.Output.Collection {
 			command.Params.OutputControls = append(command.Params.OutputControls, "--ndjson")
 		}
