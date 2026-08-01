@@ -114,17 +114,13 @@ func (r *Registry) Schema(path ...string) (SchemaDocument, bool) {
 		Output: command.Output, Pagination: command.Pagination, InvocationControls: invocationControls(), Examples: command.Examples,
 		ErrorCodes: []string{
 			"authentication_failed", "conflicting_inputs", "credential_parameter", "duplicate_flag",
-			"duplicate_parameter", "execute_not_supported", "human_authorization_required", "internal_error", "interrupted", "invalid_fields", "invalid_flag", "invalid_flag_value",
-			"invalid_decimal", "invalid_order_exposure", "invalid_output_format", "invalid_private_key",
+			"duplicate_parameter", "internal_error", "interrupted", "invalid_fields", "invalid_flag", "invalid_flag_value",
 			"invalid_parameter", "invalid_parameter_type", "invalid_parameter_value", "invalid_params",
-			"invalid_provider_response", "invalid_resource_id", "invalid_schema_path", "invalid_signed_transaction", "invalid_timeout",
-			"invalid_upstream_request", "invalid_upstream_response", "keychain_unavailable", "missing_command",
+			"invalid_provider_response", "invalid_timeout", "missing_command",
 			"missing_flag_value", "missing_parameter", "not_found", "output_too_large", "parameter_too_large", "provider_rejected",
-			"mutation_indeterminate", "order_notional_exceeded", "policy_denied", "provider_response_too_large", "provider_unavailable", "rate_limited", "sanitized_key_collision",
-			"secret_input_unavailable", "timeout", "too_many_arguments", "unknown_command", "unknown_field", "unknown_flag", "unknown_parameter",
-			"unsafe_input", "unsafe_wallet_metadata", "unsupported_flag", "unsupported_wallet_type", "upstream_not_configured",
-			"upstream_output_too_large", "upstream_rejected", "upstream_timeout", "wallet_address_mismatch", "wallet_changed",
-			"wallet_exists", "wallet_not_configured", "wallet_secret_unavailable", "wrong_chain",
+			"provider_response_too_large", "provider_unavailable", "rate_limited", "sanitized_key_collision",
+			"timeout", "too_many_arguments", "unknown_command", "unknown_field", "unknown_flag", "unknown_parameter",
+			"unsafe_input", "unsupported_flag",
 		},
 	}, true
 }
@@ -134,10 +130,6 @@ func invocationControls() []InvocationControl {
 		{
 			Name: "--compact", Type: KindBoolean, Default: false,
 			Description: "Emit single-line JSON without indentation",
-		},
-		{
-			Name: "--execute", Type: KindBoolean, Default: false,
-			Description: "Execute a mutation after controlling-terminal operator confirmation; mutations dry-run by default",
 		},
 		{
 			Name: "--fields", Type: KindString, MaximumBytes: 1024,
@@ -263,8 +255,8 @@ func validateCommand(command CommandSpec) error {
 		if !command.Effects.DryRun {
 			return fmt.Errorf("mutation command %q must support dry-run", command.ID)
 		}
-		if command.Effects.Confirmation != ConfirmationPlanHash && command.Effects.Confirmation != ConfirmationTTY {
-			return fmt.Errorf("mutation command %q must require plan-hash or controlling-terminal confirmation", command.ID)
+		if command.Effects.Confirmation != ConfirmationPlanHash {
+			return fmt.Errorf("mutation command %q must require plan-hash confirmation", command.ID)
 		}
 	}
 	return nil

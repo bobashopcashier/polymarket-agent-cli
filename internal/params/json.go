@@ -2,7 +2,6 @@ package params
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,15 +22,6 @@ const (
 // shorthand is intentionally unsupported so an agent cannot cause an implicit
 // filesystem read by prefixing a value with '@'.
 func ReadSource(raw string, stdin io.Reader, maximum int) ([]byte, error) {
-	return ReadSourceContext(context.Background(), raw, stdin, maximum)
-}
-
-// ReadSourceContext applies the complete-command deadline to bounded stdin
-// acquisition. Credential-shaped keys remain forbidden during strict decode.
-func ReadSourceContext(ctx context.Context, raw string, stdin io.Reader, maximum int) ([]byte, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	maximum = boundedMaximum(maximum)
 	if raw != "-" {
 		if len(raw) == 0 || len(raw) > maximum {
@@ -42,27 +32,7 @@ func ReadSourceContext(ctx context.Context, raw string, stdin io.Reader, maximum
 	if stdin == nil {
 		return nil, contract.Invalid("invalid_params", "--params - requires stdin")
 	}
-	type readResult struct {
-		data []byte
-		err  error
-	}
-	completed := make(chan readResult)
-	go func() {
-		data, err := io.ReadAll(io.LimitReader(stdin, int64(maximum)+1))
-		select {
-		case completed <- readResult{data: data, err: err}:
-		case <-ctx.Done():
-			zero(data)
-		}
-	}()
-	var data []byte
-	var err error
-	select {
-	case result := <-completed:
-		data, err = result.data, result.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	data, err := io.ReadAll(io.LimitReader(stdin, int64(maximum)+1))
 	if err != nil {
 		return nil, contract.Invalid("invalid_params", "could not read --params from stdin").WithCause(err)
 	}
@@ -70,12 +40,6 @@ func ReadSourceContext(ctx context.Context, raw string, stdin io.Reader, maximum
 		return nil, contract.Invalid("invalid_params", fmt.Sprintf("--params stdin must contain a JSON object no larger than %d bytes", maximum))
 	}
 	return data, nil
-}
-
-func zero(value []byte) {
-	for index := range value {
-		value[index] = 0
-	}
 }
 
 // DecodeObject parses exactly one JSON object and rejects duplicate keys at any

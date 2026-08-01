@@ -94,7 +94,6 @@ type ConfirmationMode string
 const (
 	ConfirmationNone     ConfirmationMode = "none"
 	ConfirmationPlanHash ConfirmationMode = "plan_hash"
-	ConfirmationTTY      ConfirmationMode = "controlling_tty"
 )
 
 type EffectSpec struct {
